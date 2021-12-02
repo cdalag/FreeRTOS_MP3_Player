@@ -21,7 +21,7 @@ static void halt(const char *message) {
 }
 
 /// Invoked by FreeRTOS when it detects stack overflow: #if (0 != configCHECK_FOR_STACK_OVERFLOW)
-void vApplicationStackOverflowHook(TaskHandle_t task_handle, signed char *task_name) {
+void vApplicationStackOverflowHook(TaskHandle_t task_handle, char *task_name) {
   uart_puts__polled(UART__0, "stack overflow by this task:");
   halt((const char *)task_name);
 }
@@ -46,11 +46,16 @@ void vApplicationTickHook(void) {
 }
 
 // This is needed when we use '#ifdef configASSERT'
-void configASSERT_callback(unsigned line, const char *message) {
+void configASSERT_callback(unsigned line, const char *file, const char *function, const char *message) {
   uart_puts__polled(UART__0, "FreeRTOS ASSERT() occurred indicating an error condition that should NEVER happen");
   uart_puts__polled(UART__0, " - Did you call a blocking API or non FromISR() API inside an ISR?");
   uart_puts__polled(UART__0, " - Did you forget to use fprintf(stderr) in an ISR?");
-  uart_puts__polled(UART__0, "Here is the line of code that halted the CPU: ");
+
+  uart_puts__polled(UART__0, "FreeRTOS assertion info: ");
+  uart_printf__polled(UART__0, "File: %s\n", file);
+  uart_printf__polled(UART__0, "Func: %s()\n", function);
+  uart_printf__polled(UART__0, "Line: %u\n", line);
+
   halt(message);
 }
 

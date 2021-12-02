@@ -130,12 +130,12 @@
  * You can change #if 0 to #if 1 for production, but NEVER change it during development
  */
 #if 1
-void configASSERT_callback(unsigned line, const char *message);
+void configASSERT_callback(unsigned line, const char *file, const char *function, const char *message);
 
 #define configASSERT(condition)                   \
 do {                                              \
   if(!(condition)) {                              \
-    configASSERT_callback(__LINE__, #condition);  \
+    configASSERT_callback(__LINE__, __FILE__, __FUNCTION__, #condition);  \
     while(1) {}                                   \
   }                                               \
 } while(0)

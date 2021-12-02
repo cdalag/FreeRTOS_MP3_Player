@@ -5372,6 +5372,8 @@ static void prvAddCurrentTaskToDelayedList( TickType_t xTicksToWait,
     #endif /* INCLUDE_vTaskSuspend */
 }
 
+#include "freertos_tasks.mods"
+
 /* Code below here allows additional code to be inserted into this source file,
  * especially where access to file scope functions and data is needed (for example
  * when performing module tests). */
