@@ -69,20 +69,22 @@ static void uart__wait_for_transmit_to_complete(lpc_uart *uart_regs) {
 }
 
 static bool uart__load_pending_transmit_bytes(uart_s *uart_type) {
-  const size_t hw_fifo_size = 16;
+  const uint32_t transmitter_holding_register_empty_bitmask = (1 << 5);
 
   char transmit_byte = 0;
   bool context_switch_required = false;
-  BaseType_t higher_priority_task_woke = 0;
+  BaseType_t higher_priority_task_woke = pdFALSE;
 
-  for (size_t counter = 0; counter < hw_fifo_size; counter++) {
-    if (xQueueReceiveFromISR(uart_type->queue_transmit, &transmit_byte, &higher_priority_task_woke)) {
-      uart_type->registers->THR = transmit_byte;
-      if (higher_priority_task_woke) {
-        context_switch_required = true;
-      }
-    } else {
+  // As long we we can write to the HW FIFO:
+  while (uart_type->registers->LSR & transmitter_holding_register_empty_bitmask) {
+    // Break the loop if there is no data in the transmit queue
+    if (!xQueueReceiveFromISR(uart_type->queue_transmit, &transmit_byte, &higher_priority_task_woke)) {
       break;
+    }
+
+    uart_type->registers->THR = transmit_byte;
+    if (higher_priority_task_woke) {
+      context_switch_required = true;
     }
   }
 
@@ -93,7 +95,7 @@ static bool uart__clear_receive_fifo(uart_s *uart_type) {
   const uint32_t char_available_bitmask = (1 << 0);
 
   bool context_switch_required = false;
-  BaseType_t higher_priority_task_woke = 0;
+  BaseType_t higher_priority_task_woke = pdFALSE;
 
   /**
    * While receive Hardware FIFO not empty, keep queuing the data. Even if xQueueSendFromISR()
@@ -127,7 +129,7 @@ static void uart3_isr(void) { uart__isr_common(&uarts[UART__3]); }
 static void uart__isr_common(uart_s *uart_type) {
   bool context_switch_required = false;
 
-  /// Bit Masks of the IIR register 3:1 bits contain interrupt reason.
+  // Bit Masks of the IIR register 3:1 bits contain interrupt reason.
   typedef enum {
     transmitter_empty = (1 << 0),
     receive_data_available = (2 << 0),
@@ -135,10 +137,9 @@ static void uart__isr_common(uart_s *uart_type) {
   } interrupt_reason_e;
 
   const interrupt_reason_e interrupt_reason = (interrupt_reason_e)((uart_type->registers->IIR & 0xE) >> 1);
-
   switch (interrupt_reason) {
   case transmitter_empty:
-    context_switch_required = uart__load_pending_transmit_bytes(uart_type);
+    // No action taken here if transmit HW buffer is empty as it is handled below
     break;
 
   case receive_data_available: // no-break
@@ -152,6 +153,10 @@ static void uart__isr_common(uart_s *uart_type) {
     break;
   }
   }
+
+  // Regardless of interrupt reason, use this opportunity to fill the UART HW buffer
+  // Note that uart__put() can trigger UART interrupt as a "software interrupt" without any HW reason for the interrupt
+  context_switch_required |= uart__load_pending_transmit_bytes(uart_type);
 
   portEND_SWITCHING_ISR(context_switch_required);
 }
@@ -291,6 +296,7 @@ bool uart__get(uart_e uart, char *input_byte, uint32_t timeout_ms) {
 bool uart__put(uart_e uart, char output_byte, uint32_t timeout_ms) {
   bool status = false;
   const bool rtos_is_running = taskSCHEDULER_RUNNING == xTaskGetSchedulerState();
+  const uint32_t transmitter_empty_bitmask = (1 << 6);
 
   if (uart__is_transmit_queue_enabled(uart) && rtos_is_running) {
     // Deposit to the transmit queue for now
@@ -298,20 +304,13 @@ bool uart__put(uart_e uart, char output_byte, uint32_t timeout_ms) {
 
     /* 'Transmit Complete Interrupt' may have already fired when we get here, so if there is no further pending data
      * to be sent, it will not fire again to send any data. Hence, we check here in a critical section if transmit
-     * holder register is empty, and kick-off the tranmisssion
+     * holder register is empty, and trigger the UART interrupt to dequeue the byte and start the transmission
      */
     portENTER_CRITICAL();
     {
-      lpc_uart *uart_regs = uarts[uart].registers;
-      const uint32_t uart_tx_is_idle = (1 << 6);
-
-      if (uart_regs->LSR & uart_tx_is_idle) {
-        /* Receive oldest char from the queue to send
-         * Since we are inside a critical section, we use FromISR() FreeRTOS API  variant
-         */
-        if (xQueueReceiveFromISR(uarts[uart].queue_transmit, &output_byte, NULL)) {
-          uart_regs->THR = output_byte;
-        }
+      // 0 = HW has data, 1 = shift register and HW FIFO is empty
+      if (0 != (uarts[uart].registers->LSR & transmitter_empty_bitmask)) {
+        lpc_peripheral__set_pending_interrupt(uart_peripheral_ids[uart]);
       }
     }
     portEXIT_CRITICAL();

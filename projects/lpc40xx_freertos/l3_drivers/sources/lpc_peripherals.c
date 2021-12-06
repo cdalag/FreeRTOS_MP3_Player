@@ -183,3 +183,8 @@ void lpc_peripheral__enable_interrupt(lpc_peripheral_e peripheral, function__voi
   const IRQn_Type irq_type = (IRQn_Type)peripheral;
   NVIC_EnableIRQ(irq_type); // Use CMS API
 }
+
+void lpc_peripheral__set_pending_interrupt(lpc_peripheral_e peripheral) {
+  const IRQn_Type irq_type = (IRQn_Type)peripheral;
+  NVIC_SetPendingIRQ(irq_type);
+}
